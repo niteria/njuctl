@@ -192,7 +192,16 @@ func run(args []string, stdout, stderr io.Writer) (err error) {
 	apply := flags.Bool("apply", false, "apply the sync plan and verify readback")
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: njuctl [flags] leases | devices | reserve MAC IPv4 | sync\nFlags must precede the command.")
+		var defaults strings.Builder
+		flags.SetOutput(&defaults)
 		flags.PrintDefaults()
+		flags.SetOutput(stderr)
+		for _, line := range strings.SplitAfter(defaults.String(), "\n") {
+			if strings.HasPrefix(line, "  -") {
+				line = "  --" + strings.TrimPrefix(line, "  -")
+			}
+			fmt.Fprint(stderr, line)
+		}
 	}
 	if err := flags.Parse(args); err != nil {
 		return err
