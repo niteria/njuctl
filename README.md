@@ -36,6 +36,83 @@ successful no-op. Conflicting MAC or IP reservations produce an error. A newly
 added reservation is only reported as successful after matching readback.
 The router validates the address against its DHCP configuration.
 
+## Declarative configuration with Nix
+
+The flake exports `lib.mkRouter`, which evaluates typed Nix modules and produces
+a JSON configuration, a configured CLI package, and an app. For example, add
+`inputs.njuctl.url = "github:niteria/njuctl"` to your own flake and define:
+
+```nix
+let
+  router = inputs.njuctl.lib.mkRouter {
+    inherit pkgs;
+    modules = [ ./router.nix ];
+  };
+in {
+  packages.${system}.njuctl = router.package;
+  apps.${system}.njuctl = router.app;
+}
+```
+
+`router.nix` is a Nix module, with `pkgs` available as a module argument:
+
+```nix
+{
+  router = "http://192.0.2.1";
+  username = "admin";
+  passwordFile = "/run/secrets/router-admin-password";
+  reservations = {
+    printer = {
+      mac = "02:00:00:00:00:22";
+      ip = "192.0.2.22";
+    };
+  };
+}
+```
+
+Alternatively, `passwordCommand` can obtain the admin password at invocation
+time. Its stdout becomes `NJU_PASSWORD`; an already-set `NJU_PASSWORD` takes
+precedence over the command. `passwordCommand` and `passwordFile` are mutually
+exclusive. Keep secrets out of Nix expressions and the Nix store.
+
+```sh
+# In your configuration repository:
+nix run .#njuctl -- sync           # preview the diff
+nix run .#njuctl -- --apply sync   # reconcile and verify
+nix run .#njuctl -- leases
+```
+
+The configured reservation list is authoritative: sync removes static
+reservations absent from it, replaces changed addresses, and adds missing
+entries. Deletes precede adds to handle IP swaps. Dynamic leases and other router
+settings are not managed. Descriptive names label the config and plan; they do
+not rename devices on the router.
+
+Preview performs no writes. Apply verifies the entire static lease list after
+the changes. Writes are not atomic: on failure the CLI stops and reports the
+failed change; rerun a preview to inspect the remaining diff. A matching config
+causes no writes. Avoid concurrent router edits during a sync.
+
+`router.json` exposes the generated configuration as a Nix derivation, and
+`modules.router` exports the option module for other integrations.
+
+### JSON interface
+
+The Go CLI also accepts generated JSON directly:
+
+```json
+{"reservations":[{"name":"printer","mac":"02:00:00:00:00:22","ip":"192.0.2.22"}]}
+```
+
+```sh
+njuctl --router http://192.0.2.1 --password-file /path/to/password --config router.json sync
+njuctl --router http://192.0.2.1 --password-file /path/to/password --config router.json --apply sync
+```
+
+Unknown fields, duplicate addresses/MACs, and invalid addresses are rejected
+before contacting the router. `{"reservations":[]}` explicitly declares an
+empty list; a missing or null `reservations` field is rejected.
+
 ## Authentication
 
 `--router` is required; there is no default address. Username defaults to the
@@ -62,6 +139,7 @@ raw cookie pairs in memory for this single router origin to match the web UI.
 
 A wrapper can supply `--router` and `--username`, obtain the admin password at
 runtime via `NJU_PASSWORD` or `--password-file`, then forward command arguments.
+For declarative sync it also supplies `--config` (as `lib.mkRouter` does).
 The utility has no dependency on NetworkManager or local machine configuration.
 
 ## Checks

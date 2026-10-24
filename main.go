@@ -7,9 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -190,8 +188,10 @@ func run(args []string, stdout, stderr io.Writer) (err error) {
 	file := flags.String("password-file", "", "file containing the router admin password")
 	timeout := flags.Duration("timeout", 20*time.Second, "timeout per HTTP request")
 	asJSON := flags.Bool("json", false, "JSON output")
+	configFile := flags.String("config", "", "desired reservation JSON file (required for sync)")
+	apply := flags.Bool("apply", false, "apply the sync plan and verify readback")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: njuctl [flags] leases | devices | reserve MAC IPv4\nFlags must precede the command.")
+		fmt.Fprintln(stderr, "Usage: njuctl [flags] leases | devices | reserve MAC IPv4 | sync\nFlags must precede the command.")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -204,6 +204,10 @@ func run(args []string, stdout, stderr io.Writer) (err error) {
 	}
 	command := args[0]
 	var mac, ip string
+	var desired []reservation
+	if command != "sync" && *apply {
+		return errors.New("--apply is only supported with sync")
+	}
 	switch command {
 	case "leases", "devices":
 		if len(args) != 1 {
@@ -213,15 +217,20 @@ func run(args []string, stdout, stderr io.Writer) (err error) {
 		if len(args) != 3 {
 			return errors.New("usage: njuctl [flags] reserve MAC IPv4")
 		}
-		hw, err := net.ParseMAC(args[1])
-		if err != nil || len(hw) != 6 || hw[0]&1 != 0 || hw.String() == "00:00:00:00:00:00" {
-			return errors.New("expected a unicast six-byte MAC address")
+		var err error
+		mac, ip, err = normalize(args[1], args[2])
+		if err != nil {
+			return err
 		}
-		addr, err := netip.ParseAddr(args[2])
-		if err != nil || !addr.Is4() || !addr.IsGlobalUnicast() || addr.IsLoopback() {
-			return errors.New("expected a unicast IPv4 address")
+	case "sync":
+		if len(args) != 1 || *configFile == "" {
+			return errors.New("usage: njuctl --router URL --config FILE [--apply] sync")
 		}
-		mac, ip = hw.String(), addr.String()
+		var err error
+		desired, err = loadReservations(*configFile)
+		if err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
@@ -258,6 +267,15 @@ func run(args []string, stdout, stderr io.Writer) (err error) {
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	switch command {
+	case "sync":
+		result, err := r.sync(ctx, desired, *apply)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return encoder.Encode(result)
+		}
+		return printSync(stdout, result)
 	case "leases":
 		leases, err := r.leases(ctx)
 		if err != nil {

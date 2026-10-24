@@ -10,13 +10,20 @@
       ];
     in
     {
+      lib.mkRouter =
+        { pkgs, modules }:
+        import ./nix {
+          inherit pkgs modules;
+          njuctl = self.packages.${pkgs.stdenv.hostPlatform.system}.njuctl;
+        };
+      modules.router = ./nix/module.nix;
       packages = forAllSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           package = pkgs.buildGoModule {
             pname = "njuctl";
-            version = "0.1.0";
+            version = "0.2.0";
             src = pkgs.lib.cleanSourceWith {
               src = ./.;
               filter =
